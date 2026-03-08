@@ -489,7 +489,9 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
   // the wifi driver isn't complete crap
   if (parsedPacket->payloadSize <= 0 ||
       parsedPacket->payloadSize > RAW_WIFI_FRAME_MAX_PAYLOAD_SIZE) {
-    m_console->warn("Discarding packet due to no actual payload !");
+    if (m_options.advanced_debugging_rx) {
+      m_console->debug("Discarding packet due to no actual payload !");
+    }
     return;
   }
   // Generic packet validation end - now to the openhd specific validation(s)
