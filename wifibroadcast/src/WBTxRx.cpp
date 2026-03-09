@@ -467,7 +467,13 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
   // m_console->debug("{}",radiotap::rx::parsed_radiotap_to_string(parsedPacket.value()));
   // m_per_card_calc[wlan_idx]->rf_aggregator.on_valid_openhd_packet(parsedPacket.value());
   const uint8_t* pkt_payload = parsedPacket->payload;
-  const size_t pkt_payload_size = parsedPacket->payloadSize;
+  size_t pkt_payload_size = parsedPacket->payloadSize;
+  // RTL8814AU driver includes 4-byte FCS (Frame Check Sequence) in the
+  // payload, while RTL8812AU strips it. Strip trailing FCS if present.
+  static constexpr int FCS_SIZE = 4;
+  if (pkt_payload_size > FCS_SIZE) {
+    pkt_payload_size -= FCS_SIZE;
+  }
   m_rx_stats.count_p_any++;
   m_rx_stats.count_bytes_any += pkt_payload_size;
   m_rx_stats_per_card[wlan_idx].count_p_any++;
@@ -553,6 +559,7 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
   m_rx_stats.curr_n_likely_openhd_packets++;
   const auto nonce = rx_iee80211_hdr_openhd.get_nonce();
   if (radio_port.multiplex_index == STREAM_INDEX_SESSION_KEY_PACKETS) {
+    m_console->warn("RX session key packet size:{}", pkt_payload_size);
     process_session_stream_packet(wlan_idx, radio_port, parsedPacket,
                                   pkt_payload_size, nonce);
   } else {
@@ -569,26 +576,24 @@ void WBTxRx::process_session_stream_packet(
   // encryption bit must always be set to off on session key packets, since
   // encryption serves no purpose here
   if (radio_port.encrypted) {
-    if (m_options.advanced_debugging_rx) {
-      m_console->warn(
-          "Cannot be session key packet - encryption flag set to true");
-    }
+    m_console->warn(
+        "Cannot be session key packet - encryption flag set to true");
     return;
   }
 
   if (pkt_payload_size != sizeof(SessionKeyPacket)) {
-    if (m_options.advanced_debugging_rx) {
-      m_console->warn("Cannot be session key packet - size mismatch {}",
-                      pkt_payload_size);
-    }
+    m_console->warn("Cannot be session key packet - size mismatch got:{} expected:{}",
+                    pkt_payload_size, sizeof(SessionKeyPacket));
     return;
   }
   const SessionKeyPacket& sessionKeyPacket =
       *((SessionKeyPacket*)parsedPacket->payload);
   const auto decrypt_res = m_decryptor->onNewPacketSessionKeyData(
       sessionKeyPacket.sessionKeyNonce, sessionKeyPacket.sessionKeyData);
+  m_console->warn("Session key decrypt result: {}", (int)decrypt_res);
   if (decrypt_res == wb::Decryptor::SESSION_VALID_NEW ||
       decrypt_res == wb::Decryptor::SESSION_VALID_NOT_NEW) {
+    m_console->warn("SESSION KEY VALID!");
     if (wlan_idx == 0) {  // Pollution is calculated only on card0
       m_pollution_openhd_rx_packets++;
     }
@@ -598,6 +603,7 @@ void WBTxRx::process_session_stream_packet(
     m_rx_stats_per_card.at(wlan_idx).curr_packet_loss =
         seq_nr_for_card.get_current_loss_percent();
   } else {
+    m_console->warn("SESSION KEY INVALID! result={}", (int)decrypt_res);
     m_likely_wrong_encryption_invalid_session_keys++;
   }
 
