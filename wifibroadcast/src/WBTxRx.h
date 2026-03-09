@@ -288,7 +288,7 @@ class WBTxRx {
     std::array<uint8_t,
                crypto_aead_chacha20poly1305_KEYBYTES + crypto_box_MACBYTES>
         sessionKeyData{};  // encrypted session key
-  };
+  } __attribute__((__packed__));
   static_assert(sizeof(SessionKeyPacket) == 72);
   // The final packet size ( radiotap header + iee80211 header + payload ) is
   // never bigger than that the reasoning behind this value:
