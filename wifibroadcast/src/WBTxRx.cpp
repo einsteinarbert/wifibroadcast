@@ -444,29 +444,6 @@ int WBTxRx::loop_iter_raw(const int rx_index) {
 
 void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
                            const int pkt_len) {
-  // DEBUG: Comprehensive drop reason counters
-  static struct DropCounters {
-    uint64_t total = 0;
-    uint64_t drop_radiotap = 0;
-    uint64_t drop_bad_fcs = 0;
-    uint64_t drop_not_data = 0;
-    uint64_t drop_no_payload = 0;
-    uint64_t drop_invalid_id = 0;
-    uint64_t drop_wrong_id = 0;
-    uint64_t drop_bad_port = 0;
-    uint64_t pass_session = 0;
-    uint64_t pass_data = 0;
-    std::chrono::steady_clock::time_point last_log = std::chrono::steady_clock::now();
-  } dc;
-  dc.total++;
-  auto now_dc = std::chrono::steady_clock::now();
-  if (now_dc - dc.last_log > std::chrono::seconds(5)) {
-    m_console->warn("PKT_STATS/5s: total={} radiotap={} fcs={} !data={} !payload={} !id={} wrong_id={} !port={} sess={} data={}",
-        dc.total, dc.drop_radiotap, dc.drop_bad_fcs, dc.drop_not_data, dc.drop_no_payload,
-        dc.drop_invalid_id, dc.drop_wrong_id, dc.drop_bad_port, dc.pass_session, dc.pass_data);
-    dc = {};
-    dc.last_log = now_dc;
-  }
   if (m_options.log_all_received_packets) {
     m_console->debug("Got packet {} {}", wlan_idx, pkt_len);
   }
@@ -477,7 +454,6 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
     if (m_options.advanced_debugging_rx) {
       m_console->warn("Discarding packet due to radiotap parsing error!");
     }
-    dc.drop_radiotap++;
     return;
   }
   if (parsedPacket->radiotap_f_bad_fcs) {
@@ -485,7 +461,6 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
     if (m_options.advanced_debugging_rx) {
       m_console->debug("Discarding packet due to bad FCS!");
     }
-    dc.drop_bad_fcs++;
     return;
   }
   // m_console->debug("{}",radiotap::util::radiotap_header_to_string(pkt,pkt_len));
@@ -514,7 +489,6 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
       m_console->debug("Got packet that is not a data packet {}",
                        rx_iee80211_hdr_openhd.debug_control_field());
     }
-    dc.drop_not_data++;
     return;
   }
   // All these edge cases should NEVER happen if using a proper tx/rx setup and
@@ -523,14 +497,9 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
   // (which includes 4-byte FCS from RTL8814AU driver)
   if (pkt_payload_size <= 0 ||
       pkt_payload_size > RAW_WIFI_FRAME_MAX_PAYLOAD_SIZE) {
-    static int log_count = 0;
-    if (log_count < 10) {
-      m_console->warn("DROP_PAYLOAD: pkt_len={} raw_payload={} stripped={} max={}", 
-          pkt_len, (int)parsedPacket->payloadSize, (int)pkt_payload_size, 
-          (int)RAW_WIFI_FRAME_MAX_PAYLOAD_SIZE);
-      log_count++;
+    if (m_options.advanced_debugging_rx) {
+      m_console->debug("Discarding packet due to no actual payload !");
     }
-    dc.drop_no_payload++;
     return;
   }
   // Generic packet validation end - now to the openhd specific validation(s)
@@ -544,7 +513,6 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
       m_console->debug("Got packet that has not a valid unique id {}",
                        rx_iee80211_hdr_openhd.debug_unique_ids());
     }
-    dc.drop_invalid_id++;
     return;
   }
   const auto unique_air_gnd_id = rx_iee80211_hdr_openhd.get_valid_air_gnd_id();
@@ -574,7 +542,6 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
                          rx_iee80211_hdr_openhd.debug_unique_ids());
       }
     }
-    dc.drop_wrong_id++;
     return;
   }
   if (!rx_iee80211_hdr_openhd.has_valid_radio_port()) {
@@ -582,7 +549,6 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
       m_console->debug("Got packet that has not a valid radio port{}",
                        rx_iee80211_hdr_openhd.debug_radio_ports());
     }
-    dc.drop_bad_port++;
     return;
   }
   const auto radio_port_raw = rx_iee80211_hdr_openhd.get_valid_radio_port();
@@ -595,12 +561,9 @@ void WBTxRx::on_new_packet(const uint8_t wlan_idx, const uint8_t* pkt,
   m_rx_stats.curr_n_likely_openhd_packets++;
   const auto nonce = rx_iee80211_hdr_openhd.get_nonce();
   if (radio_port.multiplex_index == STREAM_INDEX_SESSION_KEY_PACKETS) {
-    dc.pass_session++;
-    m_console->warn("RX session key packet size:{}", pkt_payload_size);
     process_session_stream_packet(wlan_idx, radio_port, parsedPacket,
                                   pkt_payload_size, nonce);
   } else {
-    dc.pass_data++;
     process_common_stream_packet(wlan_idx, radio_port, pkt, pkt_len,
                                  parsedPacket, pkt_payload, pkt_payload_size,
                                  nonce);
